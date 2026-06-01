@@ -18798,6 +18798,34 @@ body.gallery-selecting .gallery-dl-btn,
   font-family: 'Fira Code', monospace;
   opacity: 0.4;
 }
+.cookbook-download-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 0 10px 6px;
+}
+.cookbook-download-progress-track {
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.cookbook-download-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: var(--green, #50fa7b);
+  transition: width 0.25s ease;
+}
+.cookbook-download-progress-label {
+  min-width: 34px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--fg-muted);
+  font-family: 'Fira Code', monospace;
+  text-align: right;
+}
 .cookbook-task-status {
   font-size: 9px;
   padding: 1px 6px;

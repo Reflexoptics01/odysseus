@@ -33,6 +33,31 @@ function _taskBadge(task) {
   return { text: _statusLabel(task.status, task.type), cls: 'cookbook-task-' + task.status };
 }
 
+function _downloadPct(task, snapshot = '') {
+  if (task?.type !== 'download') return null;
+  const vals = [];
+  if (Number.isFinite(task.pct)) vals.push(task.pct);
+  const progress = task?.progress || '';
+  for (const text of [progress, snapshot]) {
+    if (!text) continue;
+    for (const m of text.matchAll(/(\d{1,3})%/g)) vals.push(parseInt(m[1], 10));
+  }
+  const pct = vals.length ? Math.max(...vals.filter(v => Number.isFinite(v))) : null;
+  return pct == null ? null : Math.max(0, Math.min(100, pct));
+}
+
+function _setDownloadProgress(el, task, snapshot = '') {
+  const wrap = el?.querySelector?.('.cookbook-download-progress');
+  if (!wrap) return;
+  const pct = _downloadPct(task, snapshot);
+  const running = task?.type === 'download' && task?.status === 'running';
+  wrap.style.display = (running || pct != null) ? '' : 'none';
+  const fill = wrap.querySelector('.cookbook-download-progress-fill');
+  const label = wrap.querySelector('.cookbook-download-progress-label');
+  if (fill) fill.style.width = pct == null ? '0%' : `${pct}%`;
+  if (label) label.textContent = pct == null ? 'starting download...' : `${pct}%`;
+}
+
 // Shared state/functions injected by init()
 let _envState;
 let _sshCmd;
@@ -1367,6 +1392,7 @@ export function _renderRunningTab() {
       // Indicator: spinning wave while running, green check when finished.
       const wave = el.querySelector('.cookbook-task-wave');
       if (wave) wave.style.display = task.status === 'running' ? '' : 'none';
+      _setDownloadProgress(el, task, task.output || '');
       // Model downloads (which have a Serve → button) don't get a clear pill —
       // pressing Serve clears them. Dep installs / serve tasks keep it.
       const check = el.querySelector('.cookbook-task-check');
@@ -1403,8 +1429,10 @@ export function _renderRunningTab() {
         <button class="cookbook-task-menu-btn" title="Actions">&#8942;</button>
       </div>
       <div class="cookbook-task-sub"><span class="cookbook-task-session">${esc(task.sessionId)}</span><span class="cookbook-task-uptime" style="display:${((task.type === 'serve' || task.type === 'download') && task.status === 'running') ? '' : 'none'}"></span></div>
+      ${task.type === 'download' ? '<div class="cookbook-download-progress" style="display:none;"><div class="cookbook-download-progress-track"><div class="cookbook-download-progress-fill"></div></div><span class="cookbook-download-progress-label">starting download...</span></div>' : ''}
       <div class="cookbook-output-wrap cookbook-task-collapsible${_mobileCollapseDefault ? ' cookbook-task-collapsed' : ''}"><pre class="cookbook-output-pre">${esc(task.output || '')}</pre><button type="button" class="copy-code cookbook-output-copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
     `;
+    _setDownloadProgress(el, task, task.output || '');
 
     const _waveEl = el.querySelector('.cookbook-task-wave');
     if (_waveEl && task.status === 'running') _registerWaveEl(_waveEl);
@@ -1951,6 +1979,7 @@ async function _reconnectTask(el, task) {
       if (snapshot) {
         output.textContent = snapshot;
         output.scrollTop = output.scrollHeight;
+        _setDownloadProgress(el, task, snapshot);
 
         // Live status parsing for download tasks
         if (task.type === 'download') {
@@ -2542,6 +2571,21 @@ async function _pollBackgroundStatus() {
     const activeTasks = tasks.filter(t => t.status === 'running' || t.status === 'ready');
     const errorTasks = tasks.filter(t => t.status === 'error');
     const completedTasks = tasks.filter(t => t.status === 'completed');
+
+    for (const t of tasks) {
+      const patch = {};
+      if (t.progress) patch.progress = t.progress;
+      if (Number.isFinite(t.pct)) patch.pct = t.pct;
+      if (t.output_tail) patch.output = t.output_tail;
+      if (t.status === 'completed') patch.status = 'done';
+      else if (t.status === 'error') patch.status = 'error';
+      else if (t.status === 'running' || t.status === 'ready') patch.status = 'running';
+      if (Object.keys(patch).length) _updateTask(t.session_id, patch);
+      const el = document.querySelector(`.cookbook-task[data-task-id="${CSS.escape(t.session_id)}"]`);
+      if (el) {
+        _setDownloadProgress(el, { type: t.type, status: patch.status || t.status, progress: t.progress, pct: t.pct }, t.output_tail || '');
+      }
+    }
 
     // Auto-add serve endpoints that became ready (works even when modal is closed)
     const readyServes = tasks.filter(t => t.type === 'serve' && t.status === 'ready');

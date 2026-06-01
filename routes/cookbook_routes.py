@@ -377,6 +377,85 @@ def setup_cookbook_routes() -> APIRouter:
         pid_path.write_text(str(proc.pid), encoding="utf-8")
         return {"pid": proc.pid, "log_path": str(log_path)}
 
+    def _launch_local_download_windows(
+        session_id: str,
+        repo_id: str,
+        include: str | None,
+        local_dir: str | None,
+        hf_token: str | None,
+        disable_hf_transfer: bool = False,
+    ) -> dict:
+        """Native Windows HuggingFace downloader.
+
+        The old local path tried to run the POSIX download wrapper through
+        ``bash.exe``. On Windows ARM laptops that often resolves to the Windows
+        Store/WSL stub, exits immediately, and leaves no log. Running
+        ``snapshot_download`` with the current Python is more reliable and still
+        prints tqdm progress into the log the Cookbook poller already tails.
+        """
+        log_path = TMUX_LOG_DIR / f"{session_id}.log"
+        pid_path = TMUX_LOG_DIR / f"{session_id}.pid"
+        script_path = TMUX_LOG_DIR / f"{session_id}_download.py"
+        script_path.write_text(
+            "\n".join([
+                "import os, subprocess, sys, traceback",
+                "print('[odysseus] HF token: applied' if os.environ.get('HF_TOKEN') else '[odysseus] HF token: NOT SET - gated/private models will be denied.', flush=True)",
+                "try:",
+                "    try:",
+                "        from huggingface_hub import snapshot_download",
+                "    except Exception:",
+                "        print('Installing huggingface-hub...', flush=True)",
+                "        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'huggingface-hub'])",
+                "        from huggingface_hub import snapshot_download",
+                "    repo_id = " + repr(repo_id),
+                "    kwargs = {'repo_id': repo_id, 'max_workers': 4 if " + repr(bool(disable_hf_transfer)) + " else 8}",
+                "    allow_patterns = " + repr(include or "") ,
+                "    if allow_patterns:",
+                "        kwargs['allow_patterns'] = allow_patterns",
+                "    local_dir = " + repr(local_dir or "") ,
+                "    if local_dir:",
+                "        kwargs['local_dir'] = os.path.expanduser(local_dir)",
+                "    path = snapshot_download(**kwargs)",
+                "    print('', flush=True)",
+                "    print('DOWNLOAD_OK ' + str(path), flush=True)",
+                "except Exception:",
+                "    traceback.print_exc()",
+                "    print('', flush=True)",
+                "    print('DOWNLOAD_FAILED (python exception)', flush=True)",
+                "    sys.exit(1)",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+        if disable_hf_transfer:
+            env["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+            env["HF_HUB_DOWNLOAD_MAX_WORKERS"] = "4"
+        else:
+            env.setdefault("HF_HUB_DOWNLOAD_MAX_WORKERS", "8")
+        out = open(log_path, "ab", buffering=0)
+        proc = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(Path.home()),
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            **detached_popen_kwargs(),
+        )
+        pid_path.write_text(str(proc.pid), encoding="utf-8")
+        return {"pid": proc.pid, "log_path": str(log_path)}
+
+    def _parse_download_pct(text: str) -> int | None:
+        if not text:
+            return None
+        matches = re.findall(r"(?<!\d)(\d{1,3})%\|", text)
+        matches += re.findall(r"Downloading\s*\([^)]*\):\s*(\d{1,3})%", text)
+        matches += re.findall(r"Fetching\s+\d+\s+files:\s*(\d{1,3})%", text)
+        vals = [max(0, min(100, int(v))) for v in matches if v.isdigit()]
+        return max(vals) if vals else None
+
     @router.post("/api/model/download")
     async def model_download(request: Request, req: ModelDownloadRequest):
         """Download a HuggingFace model in a tmux session.
@@ -600,9 +679,16 @@ def setup_cookbook_routes() -> APIRouter:
         logger.info(f"Download setup_cmd: {setup_cmd}")
 
         if setup_cmd is None:
-            # LOCAL Windows: launch the bash wrapper detached; no tmux setup_cmd.
+            # LOCAL Windows: launch natively; no tmux or bash dependency.
             try:
-                _launch_local_detached(session_id, lines)
+                _launch_local_download_windows(
+                    session_id,
+                    req.repo_id,
+                    req.include,
+                    _dl_base,
+                    req.hf_token,
+                    bool(req.disable_hf_transfer),
+                )
             except Exception as e:
                 logger.error(f"Local detached download launch failed: {e}")
                 return {"ok": False, "error": str(e), "session_id": session_id}
@@ -1946,6 +2032,7 @@ def setup_cookbook_routes() -> APIRouter:
             if diagnosis and status in {"running", "unknown", "stopped"}:
                 status = "error"
             output_tail = "\n".join(full_snapshot.splitlines()[-12:]) if full_snapshot else ""
+            download_pct = _parse_download_pct(full_snapshot) if task_type == "download" else None
 
             results.append({
                 "session_id": session_id,
@@ -1959,7 +2046,7 @@ def setup_cookbook_routes() -> APIRouter:
                 "cmd": _payload.get("_cmd") or "",
                 "tps": phase_info.get("tps"),
                 "reqs": phase_info.get("reqs"),
-                "pct": phase_info.get("pct"),
+                "pct": phase_info.get("pct") if task_type == "serve" else download_pct,
                 "remote": remote or "local",
             })
 
