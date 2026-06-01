@@ -146,7 +146,7 @@ function _rerenderCachedModels() {
     html += `<div class="memory-item-meta" style="font-size:10px;opacity:0.4;margin-top:2px;">${metaParts.join(' \u00b7 ')}</div>`;
     html += `</div>`;
     const _bk = _detectBackend(m).backend;
-    const _bkIco = _bk === 'llamacpp' ? '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 3C5.5 5 5 8 5 11v7c0 1.5 1 3 3 3h1v-4h6v4h1c2 0 3-1.5 3-3v-7c0-3-.5-6-2-8l-1 3c-.5-2-1.5-4-3-5-.5 2-1 3-1.5 3S11 3.5 10.5 2L7 3z" fill="currentColor"/><circle cx="9" cy="11" r="1.5" fill="var(--bg,#1a1a2e)"/><circle cx="15" cy="11" r="1.5" fill="var(--bg,#1a1a2e)"/></svg>'
+    const _bkIco = (_bk === 'llamacpp' || _bk === 'llamacpp-adreno') ? '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 3C5.5 5 5 8 5 11v7c0 1.5 1 3 3 3h1v-4h6v4h1c2 0 3-1.5 3-3v-7c0-3-.5-6-2-8l-1 3c-.5-2-1.5-4-3-5-.5 2-1 3-1.5 3S11 3.5 10.5 2L7 3z" fill="currentColor"/><circle cx="9" cy="11" r="1.5" fill="var(--bg,#1a1a2e)"/><circle cx="15" cy="11" r="1.5" fill="var(--bg,#1a1a2e)"/></svg>'
       : _bk === 'diffusers' ? '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 3c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zM6 9c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm0 6c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm6 4c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm4-8c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" fill="currentColor"/></svg>'
       : '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 4l8 16 8-16h-4l-4 8-4-8z" fill="currentColor"/></svg>';
     html += `<span class="cookbook-card-backend" data-detected="${_bk}">${_bkIco}</span>`;
@@ -353,9 +353,10 @@ function _rerenderCachedModels() {
       const defaultBackend = detectedBackend;
       const savedMatchesBackend = (ss.backend || 'vllm') === detectedBackend;
       const sv = (k, def) => (ss[k] !== undefined && savedMatchesBackend) ? ss[k] : def;
-      const defaultTp = defaultBackend === 'llamacpp' ? '1' : sv('tp', '1');
+      const isLlamaBackend = defaultBackend === 'llamacpp' || defaultBackend === 'llamacpp-adreno';
+      const defaultTp = isLlamaBackend ? '1' : sv('tp', '1');
       const detectedGpuIds = _allGpuIds(_getGpuToggleTotal?.());
-      const defaultGpus = defaultBackend === 'llamacpp'
+      const defaultGpus = isLlamaBackend
         ? '0'
         : (savedMatchesBackend && _hasOwn(ss, 'gpus') && String(ss.gpus || '').trim()
           ? ss.gpus
@@ -382,7 +383,9 @@ function _rerenderCachedModels() {
       // Row 1: Backend + Server + Env
       panelHtml += `<div class="hwfit-serve-row">`;
       const _backendChoices = _isWindows()
-        ? [['llamacpp','llama.cpp']]
+        ? (_detectBackend(m).backend === 'llamacpp-adreno'
+          ? [['llamacpp-adreno','llama.cpp Adreno'], ['llamacpp','llama.cpp CPU']]
+          : [['llamacpp','llama.cpp']])
         : _isMetal()
         // Diffusers (diffusion_server.py) is CUDA-only — omit it on Metal.
         ? [['llamacpp','llama.cpp'],['ollama','Ollama']]
@@ -403,7 +406,7 @@ function _rerenderCachedModels() {
       panelHtml += `<label>${_l('GPUs','Toggle which GPUs to use')}<div class="cookbook-gpu-group">${_gpuBtnsHtml}</div><input type="hidden" class="hwfit-sf" data-field="gpus" value="${esc(defaultGpus)}" /></label>`;
       panelHtml += `</div>`;
       // Row 2: Core settings
-      panelHtml += `<div class="hwfit-serve-row hwfit-backend-vllm hwfit-backend-sglang hwfit-backend-llamacpp">`;
+      panelHtml += `<div class="hwfit-serve-row hwfit-backend-vllm hwfit-backend-sglang hwfit-backend-llamacpp hwfit-backend-llamacpp-adreno">`;
       panelHtml += `<label class="hwfit-backend-vllm hwfit-backend-sglang">${_l('TP','Tensor Parallelism — split model across N GPUs')}<select class="hwfit-sf" data-field="tp">${tpOpts}</select></label>`;
       panelHtml += `<label>${_l('Context','Max tokens per request. Lower = less VRAM')}<input type="text" class="hwfit-sf" data-field="ctx" value="${esc(sv('ctx', '8192'))}" /></label>`;
       panelHtml += `<label>${_l('GPU','Which GPU to use. Leave empty for default')}<input type="text" class="hwfit-sf" data-field="gpu_id" value="${esc(sv('gpu_id', ''))}" placeholder="auto" style="width:50px;" /></label>`;
@@ -430,7 +433,7 @@ function _rerenderCachedModels() {
       panelHtml += `<label class="hwfit-sf-cb hwfit-backend-vllm"><input type="checkbox" class="hwfit-sf" data-field="auto_tool"${sv('auto_tool',false)?' checked':''} /> Auto Tool Choice${_h('Enable function/tool calling for agent mode')}</label>`;
       panelHtml += `</div>`;
       // Row 3a: Checkboxes (llama.cpp-only)
-      panelHtml += `<div class="hwfit-serve-checks hwfit-backend-llamacpp">`;
+      panelHtml += `<div class="hwfit-serve-checks hwfit-backend-llamacpp hwfit-backend-llamacpp-adreno">`;
       panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="unified_mem"${sv('unified_mem',false)?' checked':''} /> Unified Memory${_h('For AMD APUs / Strix Halo: exports GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 so llama.cpp can address the full BIOS VRAM carveout instead of the default ~28 GB cap. No-op on discrete GPUs.')}</label>`;
       panelHtml += `</div>`;
       // Row 3b: Checkboxes (diffusers)
@@ -510,7 +513,10 @@ function _rerenderCachedModels() {
         });
         const backend = f.backend || 'vllm';
         const serveModel = m.is_local_dir && m.path ? `${m.path}/${repo}` : repo;
-        if (backend === 'llamacpp') {
+        if (backend === 'llamacpp' || backend === 'llamacpp-adreno') {
+          if (_isWindows() && m.gguf_path) {
+            f._gguf_path = m.gguf_path;
+          } else {
           // For multi-part GGUFs, llama.cpp requires the first split
           // (-00001-of-NNNNN.gguf). Prefer it (sorted, so UD-IQ4_XS/001 comes
           // before Q4_K_M/001 etc); fall back to any single GGUF sorted.
@@ -524,6 +530,7 @@ function _rerenderCachedModels() {
           f._gguf_path = m.is_local_dir && m.path
             ? `$({ find ${_ldir} -name '*-00001-of-*.gguf' 2>/dev/null | sort; find ${_ldir} -name '*.gguf' 2>/dev/null | sort; } | head -1)`
             : `$({ find ${dir} -name '*-00001-of-*.gguf' 2>/dev/null | sort; find ${dir} -name '*.gguf' 2>/dev/null | sort; } | head -1)`;
+          }
         }
         if (f.reasoning_parser) {
           const _rpEl2 = panel.querySelector('[data-field="reasoning_parser"]');
@@ -570,7 +577,7 @@ function _rerenderCachedModels() {
           });
         } else {
           const fields = {
-            backend: cmd.includes('llama_cpp') || cmd.includes('llama-server') ? 'llamacpp' : cmd.includes('diffusion_server') ? 'diffusers' : cmd.includes('sglang') ? 'sglang' : cmd.includes('ollama') ? 'ollama' : 'vllm',
+            backend: cmd.includes('llama_cpp') || cmd.includes('llama-server') ? (cmd.includes('llama-server.exe') ? 'llamacpp-adreno' : 'llamacpp') : cmd.includes('diffusion_server') ? 'diffusers' : cmd.includes('sglang') ? 'sglang' : cmd.includes('ollama') ? 'ollama' : 'vllm',
             port: _ex(/--port\s+(\d+)/) || '8000',
             tp: _ex(/--tensor-parallel-size\s+(\d+)/) || '1',
             ctx: _ex(/--max-model-len\s+(\d+)/) || _ex(/--n_ctx\s+(\d+)/) || _ex(/-c\s+(\d+)/) || '8192',

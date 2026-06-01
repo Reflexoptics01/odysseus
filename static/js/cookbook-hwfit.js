@@ -35,6 +35,7 @@ import spinnerModule from './spinner.js';
 export let _hwfitCache = null;
 export let _hwfitDebounce = null;
 export let _cachedModelIds = null; // repo IDs already downloaded
+let _cachedModelMeta = [];
 // Bumped on every _hwfitFetch; a slow scan (remote SSH probe can take ~10s)
 // checks this before rendering so a stale response can't clobber a newer one
 // after the user has switched servers.
@@ -389,7 +390,8 @@ export async function _hwfitFetch(fresh = false) {
     fetch(`/api/model/cached?${_cacheParams}`, { credentials: 'same-origin' })
       .then(r => r.json())
       .then(d => {
-        _cachedModelIds = new Set((d.models || []).map(m => m.repo_id));
+        _cachedModelMeta = d.models || [];
+        _cachedModelIds = new Set(_cachedModelMeta.map(m => m.repo_id));
         // Re-mark rows if already rendered
         list.querySelectorAll('.hwfit-row[data-model]').forEach(row => {
           const name = row.dataset.model;
@@ -844,7 +846,7 @@ export function _expandModelRow(row, modelData) {
   row.classList.add('hwfit-row-active');
   const { backend, label } = _detectBackend(modelData);
   const isVllm = backend === 'vllm';
-  const isLlamaCpp = backend === 'llamacpp';
+  const isLlamaCpp = backend === 'llamacpp' || backend === 'llamacpp-adreno';
   const ctx = modelData.context || 8192;
 
   const dlRepo = modelData.quant_repo || modelData.name;
@@ -960,10 +962,25 @@ export function _expandModelRow(row, modelData) {
         cmd += ` --context-length ${maxCtx}`;
         cmd += ` --mem-fraction-static ${gpuUtil}`;
         cmd += ' --trust-remote-code';
-      } else if (runBackend === 'llamacpp') {
-        const dir = `"$HOME/.cache/huggingface/hub/models--${modelData.name.replace(/\//g, '--')}/snapshots"`;
-        const ggufPath = `$({ find ${dir} -name '*-00001-of-*.gguf' 2>/dev/null | sort; find ${dir} -name '*.gguf' 2>/dev/null | sort; } | head -1)`;
-        cmd = `MODEL_FILE=${ggufPath} && { [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; } || { echo "ERROR: No GGUF found on this host. Download a GGUF quant or switch backend."; exit 1; } && llama-server --model "$MODEL_FILE" --host 0.0.0.0 --port 8080 -ngl 99 -c ${maxCtx} || python3 -m llama_cpp.server --model "$MODEL_FILE" --host 0.0.0.0 --port 8080 --n_gpu_layers 99 --n_ctx ${maxCtx}`;
+      } else if (runBackend === 'llamacpp' || runBackend === 'llamacpp-adreno') {
+        const cached = _cachedModelMeta.find(m => {
+          const id = m.repo_id || '';
+          return id === modelData.name || id.endsWith('/' + modelData.name.split('/').pop());
+        }) || {};
+        if (runBackend === 'llamacpp-adreno' && !cached.gguf_path) {
+          uiModule.showError('No cached GGUF file path found. Refresh What Fits after download, or use Serve > Configure.');
+          quickRunBtn.disabled = false;
+          quickRunBtn.textContent = 'Run';
+          return;
+        }
+        if (runBackend === 'llamacpp-adreno' && cached.gguf_path) {
+          const ggufPath = String(cached.gguf_path).replace(/"/g, '\\"');
+          cmd = `llama-server.exe --model "${ggufPath}" --host 0.0.0.0 --port 8080 -ngl 99 -c ${maxCtx}`;
+        } else {
+          const dir = `"$HOME/.cache/huggingface/hub/models--${modelData.name.replace(/\//g, '--')}/snapshots"`;
+          const ggufPath = `$({ find ${dir} -name '*-00001-of-*.gguf' 2>/dev/null | sort; find ${dir} -name '*.gguf' 2>/dev/null | sort; } | head -1)`;
+          cmd = `MODEL_FILE=${ggufPath} && { [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; } || { echo "ERROR: No GGUF found on this host. Download a GGUF quant or switch backend."; exit 1; } && llama-server --model "$MODEL_FILE" --host 0.0.0.0 --port 8080 -ngl 99 -c ${maxCtx} || python3 -m llama_cpp.server --model "$MODEL_FILE" --host 0.0.0.0 --port 8080 --n_gpu_layers 99 --n_ctx ${maxCtx}`;
+        }
       } else {
         cmd = `vllm serve ${modelData.name} --host 0.0.0.0 --port ${port}`;
         cmd += ` --tensor-parallel-size ${tp}`;

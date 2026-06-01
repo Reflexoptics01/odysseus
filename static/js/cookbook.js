@@ -178,6 +178,10 @@ export function _isMetal() {
   return ['metal', 'mps', 'apple'].includes(String(_hwfitCache?.system?.backend || '').toLowerCase());
 }
 
+export function _isAdrenoOpenCL() {
+  return ['adreno_opencl', 'opencl_adreno'].includes(String(_hwfitCache?.system?.backend || '').toLowerCase());
+}
+
 /** Detect model-specific vLLM optimizations */
 function _detectModelOptimizations(modelName) {
   const n = (modelName || '').toLowerCase();
@@ -254,8 +258,12 @@ export function _detectBackend(model) {
     return { backend: 'diffusers', label: 'Diffusers' };
   }
 
-  // Windows → default to llama.cpp (no vLLM support on Windows)
+  // Windows → default to llama.cpp (no vLLM support on Windows). Snapdragon
+  // Adreno systems use the native llama.cpp OpenCL/Adreno build when present.
   if (_isWindows()) {
+    if (sysBackend === 'adreno_opencl' || sysBackend === 'opencl_adreno') {
+      return { backend: 'llamacpp-adreno', label: 'llama.cpp Adreno' };
+    }
     return { backend: 'llamacpp', label: 'llama.cpp' };
   }
 
@@ -377,8 +385,9 @@ export function _buildServeCmd(f, modelName, backend) {
     if (f.trust_remote) cmd += ' --trust-remote-code';
     if (!f.prefix_cache) cmd += ' --disable-radix-cache';
     if (f.enforce_eager) cmd += ' --disable-cuda-graph';
-  } else if (backend === 'llamacpp') {
+  } else if (backend === 'llamacpp' || backend === 'llamacpp-adreno') {
     const ggufPath = f._gguf_path || 'model.gguf';
+    const winGgufPath = String(ggufPath).replace(/"/g, '\\"');
     const gpuId = f.gpu_id?.trim() || '';
     const py = _isWindows() ? 'python' : 'python3';
     const lcPrefix = (() => {
@@ -394,13 +403,15 @@ export function _buildServeCmd(f, modelName, backend) {
       // `--model ""` which causes confusing downstream errors).
       cmd += `MODEL_FILE=${ggufPath} && { [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; } || { echo "ERROR: No GGUF found on this host. Either download the model here, or switch to the server where it's cached."; exit 1; } && `;
     }
-    const modelArg = _isWindows() ? `"${ggufPath}"` : `"$MODEL_FILE"`;
+    const modelArg = _isWindows() ? `"${winGgufPath}"` : `"$MODEL_FILE"`;
     // Prefer the native llama-server binary on Linux — its minja templating
     // renders modern GGUF chat templates that the Python bindings' Jinja2
     // rejects (do_tojson ensure_ascii). Fall back to llama_cpp.server.
     // Don't suppress stderr — surface real errors (missing file, lib, OOM).
     const _lcpServer = `${lcPrefix}${py} -m llama_cpp.server --model ${modelArg} --host 0.0.0.0 --port ${f.port || '8080'} --n_gpu_layers ${f.ngl || '99'} --n_ctx ${f.ctx || '8192'}`;
-    if (_isWindows()) {
+    if (_isWindows() && backend === 'llamacpp-adreno') {
+      cmd += `llama-server.exe --model ${modelArg} --host 0.0.0.0 --port ${f.port || '8080'} -ngl ${f.ngl || '99'} -c ${f.ctx || '8192'}`;
+    } else if (_isWindows()) {
       cmd += _lcpServer;
     } else {
       cmd += `${lcPrefix}llama-server --model ${modelArg} --host 0.0.0.0 --port ${f.port || '8080'} -ngl ${f.ngl || '99'} -c ${f.ctx || '8192'}`;

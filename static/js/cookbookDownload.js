@@ -62,9 +62,10 @@ export function _buildDownloadCmd(model, backend) {
   if (backend === 'ollama') {
     cmd = `ollama pull ${model.name.split('/').pop().toLowerCase()}`;
   } else {
-    const repo = (backend === 'llamacpp' && model.gguf_sources && model.gguf_sources.length)
+    const isLlamaBackend = backend === 'llamacpp' || backend === 'llamacpp-adreno';
+    const repo = (isLlamaBackend && model.gguf_sources && model.gguf_sources.length)
       ? model.gguf_sources[0].repo : model.name;
-    const includeArg = (backend === 'llamacpp' && model.gguf_sources && model.gguf_sources.length)
+    const includeArg = (isLlamaBackend && model.gguf_sources && model.gguf_sources.length)
       ? `, allow_patterns=["*${model.quant || ''}*"]` : '';
     // Reflect the server's download target in the preview (matches the real
     // download path built server-side). '' = default HF cache.
@@ -280,7 +281,7 @@ function _updatePanelCmd(panel, model, backend) {
   if (!pre) return;
   const f = _getPanelFields(panel);
   _syncEnvFromPanel(panel);
-  if (backend === 'llamacpp') {
+  if (backend === 'llamacpp' || backend === 'llamacpp-adreno') {
     f._gguf_path = (model.gguf_sources && model.gguf_sources.length)
       ? model.gguf_sources[0].file || 'model.gguf'
       : 'model.gguf';
@@ -402,9 +403,10 @@ export async function _runPanelCmd(panel, cmd, opts = {}) {
 // ── Model download (dedicated endpoint, tmux-backed) ──
 
 export async function _runModelDownload(panel, model, backend, hostOverride) {
-  const repo = (backend === 'llamacpp' && model.gguf_sources && model.gguf_sources.length)
+  const isLlamaBackend = backend === 'llamacpp' || backend === 'llamacpp-adreno';
+  const repo = (isLlamaBackend && model.gguf_sources && model.gguf_sources.length)
     ? model.gguf_sources[0].repo : (model.quant_repo || model.name);
-  const include = (backend === 'llamacpp' && model.gguf_sources && model.gguf_sources.length)
+  const include = (isLlamaBackend && model.gguf_sources && model.gguf_sources.length)
     ? `*${model.quant || ''}*` : null;
 
   _syncEnvFromPanel(panel);

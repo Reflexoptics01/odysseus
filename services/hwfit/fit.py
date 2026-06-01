@@ -19,6 +19,11 @@ GPU_BANDWIDTH = {
     "6950 xt": 576, "6900 xt": 512, "6800 xt": 512, "6800": 512, "6700 xt": 384, "6600 xt": 256, "6600": 224,
     "mi300x": 5300, "mi300": 5300, "mi250x": 3277, "mi250": 3277, "mi210": 1638, "mi100": 1229,
     "9070 xt": 624, "9070": 488,
+    # Snapdragon X-series integrated Adreno GPU. Public specs vary by SKU and
+    # memory configuration, so keep this conservative; exact matches beat the
+    # backend fallback and make Cookbook stop treating supported Adreno systems
+    # as CPU-only.
+    "adreno x1-45": 120, "adreno x1": 120,
     # Apple Silicon unified-memory bandwidth (GB/s). Keyed off the chip name
     # reported by sysctl machdep.cpu.brand_string (e.g. "Apple M4 Max"). Listed
     # before the bare "m_" keys matters less than length-sorting (done below),
@@ -34,7 +39,11 @@ _BW_KEYS_SORTED = sorted(GPU_BANDWIDTH.keys(), key=len, reverse=True)
 
 # metal: backstop for Apple Silicon chips not in GPU_BANDWIDTH (e.g. a future
 # M5) — the named chips above take the accurate bandwidth path instead.
-FALLBACK_K = {"cuda": 220, "rocm": 180, "metal": 150, "cpu_x86": 70, "cpu_arm": 90}
+FALLBACK_K = {
+    "cuda": 220, "rocm": 180, "metal": 150,
+    "adreno_opencl": 120,
+    "cpu_x86": 70, "cpu_arm": 90,
+}
 
 USE_CASE_WEIGHTS = {
     "general":    (0.45, 0.30, 0.15, 0.10),
@@ -423,6 +432,7 @@ def rank_models(system, use_case=None, limit=50, search=None, sort="score", quan
 
     system_backend = (system.get("backend") or "").lower()
     apple_silicon = system_backend in ("mps", "metal", "apple")
+    gguf_only_backend = apple_silicon or system_backend in ("adreno_opencl", "opencl_adreno")
 
     for m in models:
         native_q = m.get("quantization", "")
@@ -442,7 +452,7 @@ def rank_models(system, use_case=None, limit=50, search=None, sort="score", quan
         # default GGUF quant) and vLLM-only AWQ/GPTQ/FP8 builds alike. Without
         # this the Cookbook recommends models the Mac can't run; on CUDA these
         # stay visible because vLLM serves safetensors directly.
-        if apple_silicon and not (m.get("is_gguf") or m.get("gguf_sources")):
+        if gguf_only_backend and not (m.get("is_gguf") or m.get("gguf_sources")):
             continue
 
         # Format filter: AWQ tab → only AWQ models, FP8 tab → only FP8 models

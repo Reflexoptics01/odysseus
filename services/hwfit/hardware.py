@@ -401,7 +401,9 @@ def _detect_windows():
         "$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1; "
         "$r.cpu_name = $cpu.Name; "
         "$r.cpu_cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum; "
-        "$r.arch = $cpu.AddressWidth; "
+        "$cs = Get-CimInstance Win32_ComputerSystem; "
+        "$r.arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } elseif ($cs.SystemType) { $cs.SystemType } else { $env:PROCESSOR_ARCHITECTURE }; "
+        "$r.addr_width = $cpu.AddressWidth; "
         # GPU detection via nvidia-smi (fastest) or WMI fallback
         "try { "
         "  $nv = nvidia-smi --query-gpu=memory.total,name --format=csv,noheader,nounits 2>$null; "
@@ -418,7 +420,18 @@ def _detect_windows():
         "  } "
         "} catch {}; "
         "if (-not $r.gpu_name) { "
-        "  $wmiGpu = Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 } | Select-Object -First 1; "
+        "  $allGpu = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name }); "
+        "  $adreno = $allGpu | Where-Object { $_.Name -match 'Adreno|Qualcomm' } | Select-Object -First 1; "
+        "  if ($adreno) { "
+        "    $r.gpu_name = $adreno.Name; "
+        "    $r.gpu_vram_gb = [math]::Round([Math]::Max($r.ram_gb * 0.65, 1), 1); "
+        "    $r.gpu_count = 1; "
+        "    $r.gpu_backend = 'adreno_opencl'; "
+        "    $r.unified_memory = $true; "
+        "  } "
+        "}; "
+        "if (-not $r.gpu_name) { "
+        "  $wmiGpu = $allGpu | Where-Object { $_.AdapterRAM -gt 0 } | Select-Object -First 1; "
         "  if ($wmiGpu) { "
         "    $r.gpu_name = $wmiGpu.Name; "
         "    $r.gpu_vram_gb = [math]::Round($wmiGpu.AdapterRAM / 1073741824, 1); "
@@ -453,6 +466,9 @@ def _detect_windows():
         _cpu_name = (d.get("cpu_name") or "unknown")
         if isinstance(_cpu_name, str):
             _cpu_name = _cpu_name.strip() or "unknown"
+        _arch = str(d.get("arch") or "").lower()
+        _addr_width = d.get("addr_width")
+        _default_backend = "cpu_arm" if ("arm" in _arch or "aarch64" in _arch) else "cpu_x86"
         result = {
             "total_ram_gb": d.get("ram_gb", 0),
             "available_ram_gb": d.get("avail_gb", 0),
@@ -462,9 +478,11 @@ def _detect_windows():
             "gpu_name": d.get("gpu_name"),
             "gpu_vram_gb": d.get("gpu_vram_gb"),
             "gpu_count": _as_int(d.get("gpu_count"), 0),
-            "backend": d.get("gpu_backend", "cpu_x86"),
+            "backend": d.get("gpu_backend") or _default_backend,
             "homogeneous": True,
             "gpu_error": None,
+            "unified_memory": bool(d.get("unified_memory")),
+            "arch": d.get("arch") or _addr_width,
         }
         # PowerShell only reports aggregate GPU info, not per-card detail, so we
         # can't tell a mixed box from a uniform one here — assume one homogeneous

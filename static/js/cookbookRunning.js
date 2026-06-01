@@ -972,7 +972,7 @@ function _parseServeCmdToFields(cmd) {
   if (!cmd) return null;
   const ex = (re) => { const m = cmd.match(re); return m ? m[1] : ''; };
   const fields = {
-    backend: cmd.includes('llama_cpp') || cmd.includes('llama-server') ? 'llamacpp'
+    backend: cmd.includes('llama_cpp') || cmd.includes('llama-server') ? (cmd.includes('llama-server.exe') ? 'llamacpp-adreno' : 'llamacpp')
       : cmd.includes('diffusion_server') ? 'diffusers'
       : cmd.includes('sglang') ? 'sglang'
       : cmd.includes('ollama') ? 'ollama' : 'vllm',
