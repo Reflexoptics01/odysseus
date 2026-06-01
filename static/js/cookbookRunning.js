@@ -420,6 +420,9 @@ function _animateOutThenRemove(el, sessionId) {
 // ── tmux / Windows session commands ──
 
 export function _tmuxCmd(task, tmuxArgs) {
+  if (!task.remoteHost && _isLocalWindows()) {
+    return _localWinSessionCmd(task, tmuxArgs);
+  }
   if (_isWindows(task)) {
     return _winSessionCmd(task, tmuxArgs);
   }
@@ -427,6 +430,29 @@ export function _tmuxCmd(task, tmuxArgs) {
     return `ssh ${_sshPrefix(_getPort(task))}${task.remoteHost} 'tmux ${tmuxArgs}' 2>/dev/null`;
   }
   return `tmux ${tmuxArgs} 2>/dev/null`;
+}
+
+function _isLocalWindows() {
+  return /Win/i.test(navigator.platform || navigator.userAgent || '');
+}
+
+function _localWinSessionCmd(task, tmuxArgs) {
+  const sd = '$env:TEMP\\odysseus-tmux';
+  const sid = task.sessionId;
+  if (tmuxArgs.includes('capture-pane')) {
+    const lines = tmuxArgs.match(/-S\s*-?(\d+)/)?.[1] || '200';
+    return `powershell -NoProfile -Command "Get-Content '${sd}\\${sid}.log' -Tail ${lines} -ErrorAction SilentlyContinue"`;
+  }
+  if (tmuxArgs.includes('has-session')) {
+    return `powershell -NoProfile -Command "$p = Get-Content '${sd}\\${sid}.pid' -ErrorAction SilentlyContinue; if ($p) { Get-Process -Id $p -ErrorAction SilentlyContinue | Out-Null; if ($?) { exit 0 } else { exit 1 } } else { exit 1 }"`;
+  }
+  if (tmuxArgs.includes('kill-session')) {
+    return `powershell -NoProfile -Command "$p = Get-Content '${sd}\\${sid}.pid' -ErrorAction SilentlyContinue; if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }; Remove-Item '${sd}\\${sid}.*' -Force -ErrorAction SilentlyContinue"`;
+  }
+  if (tmuxArgs.includes('send-keys') && tmuxArgs.includes('C-c')) {
+    return `powershell -NoProfile -Command "$p = Get-Content '${sd}\\${sid}.pid' -ErrorAction SilentlyContinue; if ($p) { Stop-Process -Id $p -ErrorAction SilentlyContinue }"`;
+  }
+  return `powershell -NoProfile -Command "Get-Content '${sd}\\${sid}.log' -Tail 200 -ErrorAction SilentlyContinue"`;
 }
 
 function _winSessionCmd(task, tmuxArgs) {
@@ -1670,6 +1696,11 @@ export function _renderRunningTab() {
         if (_isWindows(task)) {
           const sd = '$env:TEMP\\odysseus-sessions';
           const logCmd = `ssh ${_sshPrefix(_getPort(task))}${task.remoteHost} "powershell -Command \\"Get-Content '${sd}\\${task.sessionId}.log' -Wait\\""`;
+          items.push({ label: 'Copy log cmd', action: 'copy-tmux', custom: () => {
+            _copyText(logCmd);
+          }});
+        } else if (!task.remoteHost && _isLocalWindows()) {
+          const logCmd = `powershell -NoProfile -Command "Get-Content '$env:TEMP\\odysseus-tmux\\${task.sessionId}.log' -Wait"`;
           items.push({ label: 'Copy log cmd', action: 'copy-tmux', custom: () => {
             _copyText(logCmd);
           }});
